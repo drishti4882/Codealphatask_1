@@ -1,64 +1,34 @@
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
-import main  # Importing your existing main.py
+import main
 from database_manager import DatabaseManager
-import pandas as pd
+import os
 
-app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*"}}) # Full permissive for local development
+# Create Flask app with Static folder pointing to React's build output (dist)
+app = Flask(__name__, static_folder='dist', static_url_path='')
+CORS(app)
 
-@app.before_request
-def log_request():
-    print(f">> Incoming {request.method} request to {request.path}")
+@app.route('/')
+def serve():
+    """Serves the React Frontend."""
+    return send_from_directory(app.static_folder, 'index.html')
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
-    """System health monitoring."""
-    return jsonify({"status": "healthy", "engine": "Python 3.10", "database": "Connected"})
-
-@app.route('/api/stats', methods=['GET'])
-def get_stats():
-    """Quick summary stats for the UI."""
-    db = DatabaseManager()
-    try:
-        db.connect()
-        coll = db.db["mining_results"]
-        avg = coll.aggregate([{"$group": {"_id": None, "avg_rate": {"$avg": "$Estimated Unemployment Rate (%)"}}}])
-        avg_val = list(avg)[0]['avg_rate'] if avg else 0
-        return jsonify({"average_unemployment": round(avg_val, 2), "total_records": coll.count_documents({})})
-    except:
-        return jsonify({"error": "Failed to fetch stats"}), 500
-    finally:
-        db.disconnect()
-
-@app.route('/api/anomalies', methods=['GET'])
-def get_anomalies():
-    """Return only the data points identified as economic anomalies."""
-    db = DatabaseManager()
-    try:
-        db.connect()
-        cursor = db.db["mining_results"].find({"Anomaly_Flag": 1})
-        anomalies = list(cursor)
-        for a in anomalies: a['_id'] = str(a['_id'])
-        return jsonify(anomalies)
-    except:
-        return jsonify({"error": "Failed to fetch anomalies"}), 500
-    finally:
-        db.disconnect()
+    return jsonify({"status": "healthy", "engine": "Production-Ready", "database": "MongoDB Atlas Connected"})
 
 @app.route('/api/mine', methods=['POST'])
 def run_mining():
-    """Endpoint to trigger the full mining pipeline."""
     try:
-        print(">> API Triggered: Running Enhanced Pipeline...")
+        print(">> Remote Pipeline Execution Started...")
         main.run_pipeline()
-        return jsonify({"status": "success", "message": "Neural Mining & Anomaly Detection Complete."})
+        return jsonify({"status": "success", "message": "Mining Complete"})
     except Exception as e:
+        print(f"!! Pipeline Error: {str(e)}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/api/results', methods=['GET'])
 def get_results():
-    """Endpoint to fetch results from MongoDB for the dashboard."""
     db = DatabaseManager()
     try:
         db.connect()
@@ -72,9 +42,13 @@ def get_results():
     finally:
         db.disconnect()
 
+@app.errorhandler(404)
+def not_found(e):
+    """Catch-all to serve index.html for client-side routing."""
+    return send_from_directory(app.static_folder, 'index.html')
+
 if __name__ == '__main__':
-    import os
-    # Use the port assigned by the cloud provider or default to 5000
+    # Use the port assigned by the cloud provider (Render) or default to 5000
     port = int(os.environ.get("PORT", 5000))
-    print(f">> Backend Server running on port {port}")
+    print(f">> Unified Server starting on port {port}")
     app.run(host='0.0.0.0', port=port)
