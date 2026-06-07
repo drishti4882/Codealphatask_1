@@ -82,7 +82,13 @@ const App: React.FC = () => {
   };
 
   // ── derived data ──────────────────────────────────────────────────────────
-  const regions = useMemo(() => ['All', ...Array.from(new Set(data.map(d => d.region)))], [data]);
+  // Only show state-level regions (Standard dataset) in the region slicer
+  const stateRegions = useMemo(() => {
+    const standardRegions = Array.from(new Set(
+      data.filter(d => d.source === 'Standard').map(d => d.region)
+    )).sort();
+    return ['All', ...standardRegions];
+  }, [data]);
 
   const filteredData = useMemo(() => {
     let f = data;
@@ -90,6 +96,25 @@ const App: React.FC = () => {
     if (selectedSource  !== 'All') f = f.filter(d => d.source === selectedSource);
     return f;
   }, [data, selectedRegion, selectedSource]);
+
+  // ── FIX 1: Aggregate time-series by date for the overview chart ────────────
+  // Average unemployment rate across all selected regions per date
+  const timeSeriesData = useMemo(() => {
+    const byDate = new Map<string, { rates: number[]; formattedDate: string; timestamp: number }>();
+    filteredData.forEach(d => {
+      if (!byDate.has(d.date)) {
+        byDate.set(d.date, { rates: [], formattedDate: d.formattedDate, timestamp: d.timestamp });
+      }
+      byDate.get(d.date)!.rates.push(d.unemploymentRate);
+    });
+    return Array.from(byDate.values())
+      .map(v => ({
+        formattedDate: v.formattedDate,
+        timestamp: v.timestamp,
+        unemploymentRate: parseFloat((v.rates.reduce((a,c) => a+c, 0) / v.rates.length).toFixed(2)),
+      }))
+      .sort((a, b) => a.timestamp - b.timestamp);
+  }, [filteredData]);
 
   const stats = useMemo(() => {
     const src = filteredData.length ? filteredData : [{ unemploymentRate: 0, labourParticipationRate: 0, employed: 0 }];
@@ -105,8 +130,10 @@ const App: React.FC = () => {
     { name: 'Extended', value: data.filter(d => d.source === 'Extended').length },
   ]), [data]);
 
+  // ── FIX 2: Regional analysis — only Standard (state-level) for meaningful comparison ──
   const regionalAnalysis = useMemo(() => {
-    const grp = data.reduce((acc, cur) => {
+    const stateData = data.filter(d => d.source === 'Standard');
+    const grp = stateData.reduce((acc, cur) => {
       if (!acc[cur.region]) acc[cur.region] = { region: cur.region, rate: 0, count: 0 };
       acc[cur.region].rate  += cur.unemploymentRate;
       acc[cur.region].count += 1;
@@ -117,14 +144,16 @@ const App: React.FC = () => {
       .sort((a, b) => b.rate - a.rate);
   }, [data]);
 
-  // ── seasonal: monthly averages ────────────────────────────────────────────
+  // ── FIX 3: Seasonal — properly tag isCovid and pass to bar shape ──────────
   const MONTH_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  const COVID_MONTHS = [3, 4, 5]; // Apr, May, Jun (0-indexed)
+  // Apr=3, May=4, Jun=5 (0-indexed) are COVID months
+  const COVID_MONTH_INDICES = new Set([3, 4, 5]);
 
   const seasonalData = useMemo(() => {
     const buckets: Record<number, { rates: number[]; lprs: number[] }> = {};
     for (let i = 0; i < 12; i++) buckets[i] = { rates: [], lprs: [] };
-    data.forEach(d => {
+    // Use only Standard data for seasonal to avoid double-counting
+    data.filter(d => d.source === 'Standard').forEach(d => {
       const date = parseDate(d.date);
       const m = date.getMonth();
       buckets[m].rates.push(d.unemploymentRate);
@@ -137,7 +166,7 @@ const App: React.FC = () => {
       avgLPR: buckets[i].lprs.length
         ? parseFloat((buckets[i].lprs.reduce((a,c)=>a+c,0)/buckets[i].lprs.length).toFixed(2))  : 0,
       count: buckets[i].rates.length,
-      isCovid: COVID_MONTHS.includes(i),
+      isCovid: COVID_MONTH_INDICES.has(i),
     }));
   }, [data]);
 
@@ -148,10 +177,12 @@ const App: React.FC = () => {
 
   // ── COVID phases ──────────────────────────────────────────────────────────
   const phases = useMemo(() => {
-    const pre    = data.filter(d => parseDate(d.date) < new Date(2020,2,1));
-    const during = data.filter(d => { const dt = parseDate(d.date); return dt >= new Date(2020,2,1) && dt <= new Date(2020,5,30); });
-    const post   = data.filter(d => parseDate(d.date) > new Date(2020,5,30));
-    const avg = (arr: typeof data) => arr.length ? parseFloat((arr.reduce((s,d)=>s+d.unemploymentRate,0)/arr.length).toFixed(2)) : 0;
+    // Use Standard data only for phase analysis
+    const std = data.filter(d => d.source === 'Standard');
+    const pre    = std.filter(d => parseDate(d.date) < new Date(2020,2,1));
+    const during = std.filter(d => { const dt = parseDate(d.date); return dt >= new Date(2020,2,1) && dt <= new Date(2020,5,30); });
+    const post   = std.filter(d => parseDate(d.date) > new Date(2020,5,30));
+    const avg = (arr: typeof std) => arr.length ? parseFloat((arr.reduce((s,d)=>s+d.unemploymentRate,0)/arr.length).toFixed(2)) : 0;
     return [
       { label: 'Pre-COVID',  period: 'May 2019 – Feb 2020', avg: avg(pre),    color: BRAND_GREEN,  bg: '#d1fae5' },
       { label: 'Lockdown',   period: 'Mar 2020 – Jun 2020', avg: avg(during), color: BRAND_RED,    bg: '#fee2e2' },
@@ -228,9 +259,10 @@ const App: React.FC = () => {
     { id: 'details',   label: 'Data Details' },
   ];
 
-  // ── custom bar for seasonal chart ─────────────────────────────────────────
+  // ── FIX 4: Custom bar properly reads isCovid from data payload ────────────
   const SeasonalBar = (props: any) => {
     const { x, y, width, height, isCovid } = props;
+    if (!height || height <= 0) return null;
     return <rect x={x} y={y} width={width} height={height} fill={isCovid ? BRAND_RED : BRAND_BLUE} opacity={0.82} rx={3} />;
   };
 
@@ -239,10 +271,21 @@ const App: React.FC = () => {
     const d = seasonalData.find(m => m.month === label);
     return (
       <div className="bg-white border border-slate-200 rounded-xl px-4 py-3 shadow-lg text-xs">
-        <p className="font-bold text-slate-800 mb-1">{MONTH_SHORT.indexOf(label) > -1 ? `${label} (all years)` : label}</p>
+        <p className="font-bold text-slate-800 mb-1">{label} (all years)</p>
         {d?.isCovid && <span className="text-[10px] bg-red-50 text-red-600 px-2 py-0.5 rounded-full mr-1">COVID peak</span>}
         <p className="text-slate-500 mt-1">Avg rate: <strong className="text-slate-800">{payload[0]?.value}%</strong></p>
-        <p className="text-slate-400">{d?.count} records</p>
+        <p className="text-slate-400">{d?.count} data points</p>
+      </div>
+    );
+  };
+
+  // ── FIX 5: Custom tooltip for the overview time-series ────────────────────
+  const TimeSeriestooltip = ({ active, payload, label }: any) => {
+    if (!active || !payload?.length) return null;
+    return (
+      <div className="bg-white border border-slate-200 rounded-xl px-4 py-3 shadow-lg text-xs">
+        <p className="font-bold text-slate-800 mb-1">{label}</p>
+        <p className="text-slate-500">Avg rate: <strong className="text-slate-800">{payload[0]?.value}%</strong></p>
       </div>
     );
   };
@@ -298,7 +341,7 @@ const App: React.FC = () => {
             </label>
             <select value={selectedRegion} onChange={e => setSelectedRegion(e.target.value)}
               className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm font-semibold outline-none focus:ring-2 focus:ring-blue-500 transition-all min-w-[200px]">
-              {regions.map(r => <option key={r} value={r}>{r}</option>)}
+              {stateRegions.map(r => <option key={r} value={r}>{r}</option>)}
             </select>
           </div>
           <div className="space-y-1.5">
@@ -357,17 +400,21 @@ const App: React.FC = () => {
                   <div className="flex justify-between items-start mb-2">
                     <div>
                       <h3 className="font-bold text-lg text-slate-800">Unemployment Trends Analysis</h3>
-                      <p className="text-xs text-slate-400">Time-series across all regions · COVID spike visible Apr–May 2020</p>
+                      <p className="text-xs text-slate-400">
+                        Monthly average across {selectedRegion === 'All' ? 'all regions' : selectedRegion} · COVID spike visible Apr–May 2020
+                        {' '}· <span className="font-semibold">{timeSeriesData.length} data points</span>
+                      </p>
                     </div>
                   </div>
                   {/* COVID annotation band */}
-                  <div className="flex items-center gap-2 mb-4">
+                  <div className="flex items-center gap-2 mb-4 flex-wrap">
                     <span className="text-[10px] bg-red-50 text-red-600 border border-red-100 px-2 py-0.5 rounded-full font-bold">▲ Lockdown shock: peak 76.74%</span>
                     <span className="text-[10px] bg-green-50 text-green-600 border border-green-100 px-2 py-0.5 rounded-full font-bold">↓ Recovery from Jul 2020</span>
+                    <span className="text-[10px] bg-blue-50 text-blue-600 border border-blue-100 px-2 py-0.5 rounded-full font-bold">Showing date-averaged rates</span>
                   </div>
                   <div className="h-[320px] w-full">
                     <ResponsiveContainer width="100%" height="100%">
-                      <AreaChart data={filteredData}>
+                      <AreaChart data={timeSeriesData}>
                         <defs>
                           <linearGradient id="gr" x1="0" y1="0" x2="0" y2="1">
                             <stop offset="5%"  stopColor="#3b82f6" stopOpacity={0.18}/>
@@ -375,11 +422,11 @@ const App: React.FC = () => {
                           </linearGradient>
                         </defs>
                         <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                        <XAxis dataKey="formattedDate" stroke="#94a3b8" fontSize={10} axisLine={false} tickLine={false} />
+                        <XAxis dataKey="formattedDate" stroke="#94a3b8" fontSize={10} axisLine={false} tickLine={false}
+                          interval={Math.floor(timeSeriesData.length / 10)} />
                         <YAxis stroke="#94a3b8" fontSize={10} axisLine={false} tickLine={false} tickFormatter={v => `${v}%`} />
-                        <Tooltip contentStyle={{ borderRadius:'12px', border:'none', boxShadow:'0 10px 15px -3px rgb(0 0 0/0.1)' }}
-                          formatter={(v: any) => [`${v}%`, 'Rate']} />
-                        <Area type="monotone" dataKey="unemploymentRate" stroke="#3b82f6" strokeWidth={2.5} fillOpacity={1} fill="url(#gr)" />
+                        <Tooltip content={<TimeSeriestooltip />} />
+                        <Area type="monotone" dataKey="unemploymentRate" stroke="#3b82f6" strokeWidth={2.5} fillOpacity={1} fill="url(#gr)" dot={false} />
                       </AreaChart>
                     </ResponsiveContainer>
                   </div>
@@ -415,17 +462,18 @@ const App: React.FC = () => {
           {activeTab === 'regions' && (
             <motion.div key="regions" initial={{ opacity:0, x:20 }} animate={{ opacity:1, x:0 }} exit={{ opacity:0, x:-20 }} className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-                <h3 className="font-bold text-lg mb-6 flex items-center gap-2">
+                <h3 className="font-bold text-lg mb-1 flex items-center gap-2">
                   <BarChart3 size={18} className="text-blue-500" /> Average Rate by State
                 </h3>
-                <div className="h-[420px]">
+                <p className="text-xs text-slate-400 mb-4">Standard dataset · state-level averages (May 2019 – Jun 2020)</p>
+                <div className="h-[500px]">
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={regionalAnalysis} layout="vertical" margin={{ left: 40 }}>
+                    <BarChart data={regionalAnalysis} layout="vertical" margin={{ left: 10, right: 20, top: 4, bottom: 4 }}>
                       <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f1f5f9" />
                       <XAxis type="number" fontSize={10} axisLine={false} tickLine={false} tickFormatter={v=>`${v}%`} />
-                      <YAxis dataKey="region" type="category" fontSize={10} axisLine={false} tickLine={false} width={90} />
+                      <YAxis dataKey="region" type="category" fontSize={9} axisLine={false} tickLine={false} width={110} />
                       <Tooltip formatter={(v:any) => [`${v}%`, 'Avg rate']} />
-                      <Bar dataKey="rate" radius={[0,4,4,0]} barSize={16}>
+                      <Bar dataKey="rate" radius={[0,4,4,0]} barSize={12}>
                         {regionalAnalysis.map((r, i) => (
                           <Cell key={i} fill={r.rate > 20 ? BRAND_RED : r.rate > 12 ? BRAND_AMBER : BRAND_BLUE} />
                         ))}
@@ -444,7 +492,7 @@ const App: React.FC = () => {
                 <h3 className="font-bold text-lg mb-2 flex items-center gap-2">
                   <Layers size={18} className="text-blue-500" /> High-Impact Regions
                 </h3>
-                <p className="text-xs text-slate-400 mb-5">Regions with highest average unemployment during the observed period.</p>
+                <p className="text-xs text-slate-400 mb-5">Top 5 states with highest average unemployment during the observed period.</p>
                 <div className="space-y-3">
                   {regionalAnalysis.slice(0, 5).map((r, i) => (
                     <div key={r.region} className="flex items-center gap-4 p-4 bg-slate-50 rounded-xl hover:bg-slate-100 transition-colors">
@@ -460,6 +508,25 @@ const App: React.FC = () => {
                       </div>
                     </div>
                   ))}
+                </div>
+
+                {/* Extended dataset summary */}
+                <div className="mt-6 pt-4 border-t border-slate-100">
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-3">Extended Dataset — Regional Zones</p>
+                  {(['South','North','East','West','Northeast'] as const).map(zone => {
+                    const zoneData = data.filter(d => d.source === 'Extended' && d.region === zone);
+                    if (!zoneData.length) return null;
+                    const avg = parseFloat((zoneData.reduce((s,d)=>s+d.unemploymentRate,0)/zoneData.length).toFixed(2));
+                    return (
+                      <div key={zone} className="flex items-center justify-between py-2 border-b border-slate-50 last:border-0">
+                        <span className="text-xs font-semibold text-slate-600">{zone}</span>
+                        <span className={cn('text-[11px] font-bold px-2 py-0.5 rounded-full',
+                          avg > 20 ? 'bg-red-50 text-red-600' : avg > 12 ? 'bg-amber-50 text-amber-600' : 'bg-blue-50 text-blue-600')}>
+                          {avg}% avg
+                        </span>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             </motion.div>
@@ -486,11 +553,11 @@ const App: React.FC = () => {
                 <div className="flex justify-between items-start mb-1">
                   <div>
                     <h3 className="font-bold text-lg text-slate-800">Monthly Seasonal Pattern</h3>
-                    <p className="text-xs text-slate-400">Average unemployment rate per calendar month (all years combined)</p>
+                    <p className="text-xs text-slate-400">Average unemployment rate per calendar month · Standard dataset · all states combined</p>
                   </div>
                   <div className="flex gap-3 text-[10px] font-bold text-slate-500">
                     <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-blue-500 inline-block"/>Normal</span>
-                    <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-red-500 inline-block"/>COVID peak</span>
+                    <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-red-500 inline-block"/>COVID peak (Apr–Jun)</span>
                   </div>
                 </div>
                 <div className="h-[280px] mt-4">
@@ -502,7 +569,12 @@ const App: React.FC = () => {
                       <Tooltip content={<SeasonalTooltip />} cursor={{ fill:'rgba(0,0,0,0.03)' }} />
                       <ReferenceLine y={seasonalAvg} stroke="#3b82f6" strokeDasharray="4 4"
                         label={{ value:`Avg ${seasonalAvg}%`, fill:'#3b82f6', fontSize:10, position:'insideTopRight' }} />
-                      <Bar dataKey="avgRate" shape={<SeasonalBar />} />
+                      {/* FIX: Use Cell to colour each bar individually */}
+                      <Bar dataKey="avgRate" radius={[3,3,0,0]} barSize={32}>
+                        {seasonalData.map((entry, index) => (
+                          <Cell key={`cell-${index}`} fill={entry.isCovid ? BRAND_RED : BRAND_BLUE} opacity={0.82} />
+                        ))}
+                      </Bar>
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
@@ -512,7 +584,7 @@ const App: React.FC = () => {
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
                   <h3 className="font-bold text-base text-slate-800 mb-1">Labour Participation Rate — seasonal</h3>
-                  <p className="text-xs text-slate-400 mb-4">Monthly average LPR across all regions</p>
+                  <p className="text-xs text-slate-400 mb-4">Monthly average LPR across all states · Standard dataset</p>
                   <div className="h-[220px]">
                     <ResponsiveContainer width="100%" height="100%">
                       <LineChart data={seasonalData}>
@@ -533,7 +605,7 @@ const App: React.FC = () => {
                   <div className="space-y-3">
                     {[
                       { month:'Jan–Feb', icon:<CloudRain size={14}/>, color:'text-blue-600', bg:'bg-blue-50', text:'Elevated rates due to rabi harvest off-season — reduced rural agricultural employment.' },
-                      { month:'Apr–May', icon:<AlertTriangle size={14}/>, color:'text-red-600', bg:'bg-red-50', text:'COVID-19 lockdown spike. Apr 2020 averaged 23.6% — highest single month.' },
+                      { month:'Apr–Jun', icon:<AlertTriangle size={14}/>, color:'text-red-600', bg:'bg-red-50', text:'COVID-19 lockdown spike. Apr 2020 averaged 23.6% — highest single month across states.' },
                       { month:'Jul–Aug', icon:<Sun size={14}/>, color:'text-amber-600', bg:'bg-amber-50', text:'Partial recovery as lockdown eased and Kharif sowing season began.' },
                       { month:'Oct–Nov', icon:<Sprout size={14}/>, color:'text-green-600', bg:'bg-green-50', text:'Historically lowest unemployment — post-harvest agricultural activity peaks.' },
                     ].map(item => (
@@ -605,9 +677,9 @@ const App: React.FC = () => {
                   </h3>
                   <p className="text-xs text-slate-400 mb-6">Unsupervised mining from <code>clustering.py</code> based on <em>Unemployment</em> vs <em>Participation</em> metrics.</p>
                   <div className="space-y-5">
-                    <ImpactZoneItem color="bg-red-500"    label="High Impact Zone"     desc="Massive spikes (>30%) and declining participation." />
-                    <ImpactZoneItem color="bg-amber-500"  label="Moderate Impact Zone" desc="Significant volatility but steady job seeking." />
-                    <ImpactZoneItem color="bg-emerald-500" label="Low Impact Zone"     desc="Resilience through agricultural safety nets." />
+                    <ImpactZoneItem color="bg-red-500"    label="High Impact Zone"     desc="Massive spikes (>30%) and declining participation. Includes Tripura, Haryana, Jharkhand." />
+                    <ImpactZoneItem color="bg-amber-500"  label="Moderate Impact Zone" desc="Significant volatility but steady job seeking. Includes Bihar, Delhi, Tamil Nadu." />
+                    <ImpactZoneItem color="bg-emerald-500" label="Low Impact Zone"     desc="Resilience through agricultural safety nets. Includes Karnataka, Madhya Pradesh, Gujarat." />
                   </div>
                 </div>
               </div>
@@ -684,7 +756,7 @@ const App: React.FC = () => {
                 })}
               </div>
               <p className="text-[10px] text-slate-400 text-center">
-                Insights derived from CMIE unemployment dataset (May 2019 – Nov 2020) · 1,007 records · 28 Indian states
+                Insights derived from CMIE unemployment dataset (May 2019 – Nov 2020) · {data.length.toLocaleString()} records · 28 Indian states
               </p>
             </motion.div>
           )}
@@ -695,7 +767,7 @@ const App: React.FC = () => {
               className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
               <div className="p-4 border-b border-slate-100 bg-slate-50 flex justify-between items-center">
                 <span className="text-xs font-bold text-slate-500 uppercase tracking-widest">Master Data View</span>
-                <span className="text-[10px] font-medium text-slate-400">{filteredData.length} records found</span>
+                <span className="text-[10px] font-medium text-slate-400">{filteredData.length.toLocaleString()} records found</span>
               </div>
               <div className="overflow-x-auto max-h-[500px]">
                 <table className="w-full text-left text-xs">
@@ -703,7 +775,9 @@ const App: React.FC = () => {
                     <tr className="text-slate-400">
                       <th className="p-4 font-bold">REGION</th>
                       <th className="p-4 font-bold">DATE</th>
+                      <th className="p-4 font-bold">AREA</th>
                       <th className="p-4 font-bold text-center">RATE (%)</th>
+                      <th className="p-4 font-bold">LPR (%)</th>
                       <th className="p-4 font-bold text-right">EMPLOYED (M)</th>
                       <th className="p-4 font-bold">SOURCE</th>
                     </tr>
@@ -713,6 +787,7 @@ const App: React.FC = () => {
                       <tr key={i} className="hover:bg-slate-50 transition-colors">
                         <td className="p-4 font-bold text-slate-700">{d.region}</td>
                         <td className="p-4 text-slate-500">{d.date}</td>
+                        <td className="p-4 text-slate-400 text-[10px]">{d.area ?? '—'}</td>
                         <td className="p-4 text-center">
                           <span className={cn('px-2 py-0.5 rounded-full text-[10px] font-bold',
                             d.unemploymentRate > 20 ? 'bg-red-50 text-red-600' :
@@ -720,6 +795,7 @@ const App: React.FC = () => {
                             {d.unemploymentRate}%
                           </span>
                         </td>
+                        <td className="p-4 text-slate-500">{d.labourParticipationRate}%</td>
                         <td className="p-4 text-right text-slate-500">{(d.employed / 1_000_000).toFixed(2)}M</td>
                         <td className="p-4">
                           <span className="text-[10px] font-medium text-slate-400 border border-slate-200 px-2 py-0.5 rounded-full uppercase">{d.source}</span>
