@@ -3,7 +3,7 @@ import pandas as pd
 import json
 
 class DatabaseManager:
-    def __init__(self, uri="mongodb+srv://<db_username>:<db_password>@cluster0.q8h27tp.mongodb.net/?appName=Cluster0", db_name="unemployment_analytics"):
+    def __init__(self, uri="mongodb+srv://<drishti466>:<gungunji2006>@cluster0.q8h27tp.mongodb.net/?appName=Cluster0", db_name="unemployment_analytics"):
         """
         Initialize MongoDB Connection.
         Replace 'uri' with your MongoDB Atlas connection string if needed.
