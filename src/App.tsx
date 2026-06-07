@@ -63,12 +63,11 @@ const App: React.FC = () => {
     setLogs(["[START] Connecting to local PyKernel...", "[PROCESS] Triggering Flask API: /api/mine"]);
     
     try {
-      // Direct call to IP to avoid Windows DNS delays
-      const apiUrl = 'http://127.0.0.1:5000';
+      // Relative URL for unified deployment (Server & Dashboard on same host)
+      const apiUrl = '';
         
       const response = await fetch(`${apiUrl}/api/mine`, { 
         method: 'POST',
-        mode: 'cors',
         headers: { 'Content-Type': 'application/json' }
       });
       if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
@@ -611,6 +610,3 @@ const FooterLink = ({ label }: { label: string }) => (
 );
 
 export default App;
-
-
-
