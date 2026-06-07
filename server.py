@@ -3,7 +3,6 @@ from flask_cors import CORS
 import main
 from database_manager import DatabaseManager
 import os
-
 # Create Flask app with Static folder pointing to React's build output (dist)
 app = Flask(__name__, static_folder='dist', static_url_path='')
 CORS(app)
