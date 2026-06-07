@@ -3,9 +3,15 @@ from flask_cors import CORS
 import main
 from database_manager import DatabaseManager
 import os
+
 # Create Flask app with Static folder pointing to React's build output (dist)
 app = Flask(__name__, static_folder='dist', static_url_path='')
-CORS(app)
+# Full permissive CORS to fix connection errors
+CORS(app, resources={r"/api/*": {"origins": "*"}})
+
+@app.before_request
+def log_request_info():
+    print(f">> Incoming {request.method} to {request.path}")
 
 @app.route('/')
 def serve():
@@ -14,7 +20,7 @@ def serve():
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
-    return jsonify({"status": "healthy", "engine": "Production-Ready", "database": "MongoDB Atlas Connected"})
+    return jsonify({"status": "healthy", "engine": "Production-Ready", "database": "Connected"})
 
 @app.route('/api/mine', methods=['POST'])
 def run_mining():
