@@ -3,20 +3,31 @@ from flask_cors import CORS
 import main
 from database_manager import DatabaseManager
 import os
+import pandas as pd
+import json
 
-# Create Flask app with Static folder pointing to React's build output (dist)
+# Master Unified Server
 app = Flask(__name__, static_folder='dist', static_url_path='')
-# Full permissive CORS to fix connection errors
+# Optimized CORS for Windows/Cloud compatibility
 CORS(app, resources={r"/api/*": {"origins": "*"}})
 
-@app.before_request
-def log_request_info():
-    print(f">> Incoming {request.method} to {request.path}")
+@app.route('/', defaults={'path': ''})
+@app.route('/<path:path>')
+def serve(path):
+    """
+    PERMANENT FIX: This serves your website and all its assets 
+    from the same port as the Python code.
+    """
+    if path != "" and os.path.exists(app.static_folder + '/' + path):
+        return send_from_directory(app.static_folder, path)
+    else:
+        return send_from_directory(app.static_folder, 'index.html')
 
-@app.route('/')
-def serve():
-    """Serves the React Frontend."""
-    return send_from_directory(app.static_folder, 'index.html')
+@app.before_request
+def log_request():
+    # This helps you see in the terminal if the button is working
+    if request.path.startswith('/api'):
+        print(f">> [API CALL] {request.method} {request.path}")
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
@@ -34,18 +45,34 @@ def run_mining():
 
 @app.route('/api/results', methods=['GET'])
 def get_results():
-    db = DatabaseManager()
+    """
+    Returns the latest mined data. 
+    FALLBACK: If MongoDB is down, it reads directly from the exported CSV.
+    """
     try:
+        db = DatabaseManager()
         db.connect()
-        collection = db.db["mining_results"]
-        cursor = collection.find().sort("Date", -1).limit(200)
-        results = list(cursor)
-        for r in results: r['_id'] = str(r['_id'])
-        return jsonify(results)
+        if db.db is not None:
+            # Try to get from MongoDB
+            cursor = db.db["mining_results"].find().sort("Date", -1).limit(500)
+            results = list(cursor)
+            for r in results:
+                if '_id' in r: r['_id'] = str(r['_id'])
+            db.disconnect()
+            return jsonify(results)
+        else:
+            raise Exception("No DB Connection")
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
-    finally:
-        db.disconnect()
+        print(f">> DB not available, falling back to local CSV storage: {e}")
+        if os.path.exists("results_for_powerbi.csv"):
+            try:
+                df = pd.read_csv("results_for_powerbi.csv")
+                # Fix: Load JSON string to object so jsonify can handle it
+                data_list = json.loads(df.to_json(orient='records'))
+                return jsonify(data_list)
+            except Exception as csv_err:
+                print(f"!! Critical: CSV load error: {csv_err}")
+        return jsonify([])
 
 @app.errorhandler(404)
 def not_found(e):
