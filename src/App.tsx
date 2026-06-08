@@ -54,32 +54,18 @@ const App: React.FC = () => {
     setIsProcessing(true);
     setCurrentProgress(0);
     setActiveTab('mining');
-    setLogs(['[START] Connecting to local PyKernel...', '[PROCESS] Triggering Flask API: /api/mine']);
+    setLogs(['[START] Connecting to Unified Engine...', '[PROCESS] API: /api/mine']);
     try {
-      const response = await fetch('http://127.0.0.1:5000/api/mine', {
-        method: 'POST', mode: 'cors',
+      // PERMANENT FIX: If we are on port 5173 (dev), call 5000. 
+      // If we are on port 5000, call the relative path (unified).
+      const apiUrl = window.location.port === '5173' 
+        ? `http://127.0.0.1:5000` 
+        : '';
+      
+      const response = await fetch(`${apiUrl}/api/mine`, {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' }
       });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const steps = [
-        { msg: '[CLEAN] data_loader: Standardizing archive (7) datasets', delay: 500 },
-        { msg: '[DL] neural_network.py: Training TensorFlow Neural Net',   delay: 1500 },
-        { msg: '[MINING] clustering.py: Updating impact zones',            delay: 2500 },
-        { msg: '[DB] database_manager.py: Syncing NoSQL documents',        delay: 3500 },
-        { msg: '[SUCCESS] Full Mining Pipeline Complete.',                  delay: 4500 },
-      ];
-      steps.forEach(({ msg, delay }, i) => {
-        setTimeout(() => {
-          setLogs(p => [...p, msg]);
-          setCurrentProgress(((i + 1) / steps.length) * 100);
-          if (i === steps.length - 1) setIsProcessing(false);
-        }, delay);
-      });
-    } catch {
-      setLogs(p => [...p, "!! CONNECTION ERROR: Please run 'python server.py' in your terminal."]);
-      setIsProcessing(false);
-    }
-  };
 
   // ── derived data ──────────────────────────────────────────────────────────
   // Only show state-level regions (Standard dataset) in the region slicer
