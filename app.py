@@ -8,70 +8,59 @@ import json
 
 # Master Unified Server
 app = Flask(__name__, static_folder='dist', static_url_path='')
-# Optimized CORS for Windows/Cloud compatibility
-CORS(app, resources={r"/api/*": {"origins": "*"}})
+
+# PERMANENT FIX: Full permissive CORS for local development ports
+CORS(app, resources={r"/api/*": {"origins": ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:5000", "http://127.0.0.1:5000"]}})
 
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
 def serve(path):
-    """
-    PERMANENT FIX: This serves your website and all its assets 
-    from the same port as the Python code.
-    """
-    if path != "" and os.path.exists(app.static_folder + '/' + path):
+    """Serve React frontend assets or index.html for routing."""
+    if path != "" and os.path.exists(os.path.join(app.static_folder, path)):
         return send_from_directory(app.static_folder, path)
-    else:
-        return send_from_directory(app.static_folder, 'index.html')
-
-@app.before_request
-def log_request():
-    # This helps you see in the terminal if the button is working
-    if request.path.startswith('/api'):
-        print(f">> [API CALL] {request.method} {request.path}")
+    return send_from_directory(app.static_folder, 'index.html')
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
-    return jsonify({"status": "healthy", "engine": "Production-Ready", "database": "Connected"})
+    """Verify backend is alive."""
+    return jsonify({"status": "healthy", "engine": "Mining-v2"})
 
-@app.route('/api/mine', methods=['POST'])
+@app.route('/api/mine', methods=['POST', 'OPTIONS'])
 def run_mining():
+    """Execute the full data mining pipeline."""
+    if request.method == 'OPTIONS':
+        return jsonify({"status": "ok"}), 200
+        
     try:
-        print(">> Remote Pipeline Execution Started...")
+        print(">> [EXECUTE] Mining Pipeline Triggered via API")
         main.run_pipeline()
+        print(">> [SUCCESS] Pipeline execution finished")
         return jsonify({"status": "success", "message": "Mining Complete"})
     except Exception as e:
-        print(f"!! Pipeline Error: {str(e)}")
-        return jsonify({"status": "error", "message": str(e)}), 500
+        error_msg = str(e)
+        print(f"!! [ERROR] {error_msg}")
+        return jsonify({"status": "error", "message": error_msg}), 500
 
 @app.route('/api/results', methods=['GET'])
 def get_results():
-    """
-    Returns the latest mined data. 
-    FALLBACK: If MongoDB is down, it reads directly from the exported CSV.
-    """
+    """Fetch mined results from MongoDB or CSV fallback."""
+    print(">> [FETCH] Request for latest results")
     try:
         db = DatabaseManager()
         db.connect()
         if db.db is not None:
-            # Try to get from MongoDB
             cursor = db.db["mining_results"].find().sort("Date", -1).limit(500)
             results = list(cursor)
             for r in results:
                 if '_id' in r: r['_id'] = str(r['_id'])
             db.disconnect()
             return jsonify(results)
-        else:
-            raise Exception("No DB Connection")
+        raise Exception("Database offline")
     except Exception as e:
-        print(f">> DB not available, falling back to local CSV storage: {e}")
+        print(f">> [FALLBACK] Database offline, reading CSV: {e}")
         if os.path.exists("results_for_powerbi.csv"):
-            try:
-                df = pd.read_csv("results_for_powerbi.csv")
-                # Fix: Load JSON string to object so jsonify can handle it
-                data_list = json.loads(df.to_json(orient='records'))
-                return jsonify(data_list)
-            except Exception as csv_err:
-                print(f"!! Critical: CSV load error: {csv_err}")
+            df = pd.read_csv("results_for_powerbi.csv")
+            return jsonify(json.loads(df.to_json(orient='records')))
         return jsonify([])
 
 @app.errorhandler(404)
