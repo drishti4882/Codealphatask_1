@@ -46,66 +46,37 @@ const App: React.FC = () => {
   const [currentProgress, setCurrentProgress]  = useState(0);
   const [isProcessing,    setIsProcessing]     = useState(false);
   const [expandedPolicy,  setExpandedPolicy]   = useState<number|null>(1);
-  
-  // LIVE DATA STATE
-  const [minedData, setMinedData] = useState<any[]>([]);
-  // Function to load data from Python Backend
-  const loadLatestResults = async () => {
-    try {
-      const host = window.location.port === '5173' ? 'http://127.0.0.1:5000' : '';
-      const response = await fetch(`${host}/api/results`);
-      const json = await response.json();
-      if (json && json.length > 0) {
-         // Process dates for Recharts
-         const processed = json.map((d: any) => ({
-            ...d,
-            region: d.region || d.Region,
-            unemploymentRate: d.unemployment_rate || d['Estimated Unemployment Rate (%)'],
-            labourParticipationRate: d.participation_rate || d['Estimated Labour Participation Rate (%)'],
-            employed: d.employed || d['Estimated Employed'],
-            formattedDate: d.Date
-         }));
-         setMinedData(processed);
-      }
-    } catch (err) {
-      console.log("Backend not active, using sample data.");
-    }
-  };
-  // Load on startup
-  React.useEffect(() => { loadLatestResults(); }, []);
-  const data = useMemo(() => minedData.length > 0 ? minedData : getProcessedData(), [minedData]);
+
+  const data = useMemo(() => getProcessedData(), []);
+
   // ── pipeline ──────────────────────────────────────────────────────────────
   const runPipeline = async () => {
     setIsProcessing(true);
     setCurrentProgress(0);
     setActiveTab('mining');
-    setLogs(['[START] Connecting to Unified Engine...', '[PROCESS] API: /api/mine']);
+    setLogs(['[START] Connecting to local PyKernel...', '[PROCESS] Triggering Flask API: /api/mine']);
     try {
-      const host = window.location.port === '5173' ? 'http://127.0.0.1:5000' : '';
-      const response = await fetch(`${host}/api/mine`, {
-        method: 'POST',
+      const response = await fetch('http://127.0.0.1:5000/api/mine', {
+        method: 'POST', mode: 'cors',
         headers: { 'Content-Type': 'application/json' }
       });
-      
-      if (!response.ok) throw new Error("Server Error");
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const steps = [
-        { msg: '[CLEAN] data_loader: Scanning archive folder', delay: 500 },
-        { msg: '[DL] neural_network.py: Training MLP Brain',   delay: 1500 },
-        { msg: '[MINING] clustering.py: Calculating impact zones', delay: 2500 },
-        { msg: '[SUCCESS] Mining Finished. Updating Dashboard...', delay: 4500 },
+        { msg: '[CLEAN] data_loader: Standardizing archive (7) datasets', delay: 500 },
+        { msg: '[DL] neural_network.py: Training TensorFlow Neural Net',   delay: 1500 },
+        { msg: '[MINING] clustering.py: Updating impact zones',            delay: 2500 },
+        { msg: '[DB] database_manager.py: Syncing NoSQL documents',        delay: 3500 },
+        { msg: '[SUCCESS] Full Mining Pipeline Complete.',                  delay: 4500 },
       ];
       steps.forEach(({ msg, delay }, i) => {
         setTimeout(() => {
           setLogs(p => [...p, msg]);
           setCurrentProgress(((i + 1) / steps.length) * 100);
-          if (i === steps.length - 1) {
-            setIsProcessing(false);
-            loadLatestResults(); // <--- REFRESH CHARTS WITH NEW CSV DATA
-          }
+          if (i === steps.length - 1) setIsProcessing(false);
         }, delay);
       });
-    } catch (err) {
-      setLogs(p => [...p, "!! CONNECTION ERROR: Ensure 'python app.py' is running on Port 5000."]);
+    } catch {
+      setLogs(p => [...p, "!! CONNECTION ERROR: Please run 'python server.py' in your terminal."]);
       setIsProcessing(false);
     }
   };
