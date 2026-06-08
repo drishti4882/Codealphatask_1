@@ -4,19 +4,25 @@ import main
 from database_manager import DatabaseManager
 import os
 
-# Create Flask app with Static folder pointing to React's build output (dist)
+# Master Unified Server
 app = Flask(__name__, static_folder='dist', static_url_path='')
-# Full permissive CORS to fix connection errors
-CORS(app, resources={r"/api/*": {"origins": "*"}})
+CORS(app) # Enable CORS for development
+
+@app.route('/', defaults={'path': ''})
+@app.route('/<path:path>')
+def serve(path):
+    """
+    
+    if path != "" and os.path.exists(app.static_folder + '/' + path):
+        return send_from_directory(app.static_folder, path)
+    else:
+        return send_from_directory(app.static_folder, 'index.html')
 
 @app.before_request
-def log_request_info():
-    print(f">> Incoming {request.method} to {request.path}")
-
-@app.route('/')
-def serve():
-    """Serves the React Frontend."""
-    return send_from_directory(app.static_folder, 'index.html')
+def log_request():
+    # This helps you see in the terminal if the button is working
+    if request.path.startswith('/api'):
+        print(f">> [API CALL] {request.method} {request.path}")
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
