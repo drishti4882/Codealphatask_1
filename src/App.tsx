@@ -46,9 +46,34 @@ const App: React.FC = () => {
   const [currentProgress, setCurrentProgress]  = useState(0);
   const [isProcessing,    setIsProcessing]     = useState(false);
   const [expandedPolicy,  setExpandedPolicy]   = useState<number|null>(1);
-
-  const data = useMemo(() => getProcessedData(), []);
-
+  
+  // LIVE DATA STATE
+  const [minedData, setMinedData] = useState<any[]>([]);
+  // Function to load data from Python Backend
+  const loadLatestResults = async () => {
+    try {
+      const host = window.location.port === '5173' ? 'http://127.0.0.1:5000' : '';
+      const response = await fetch(`${host}/api/results`);
+      const json = await response.json();
+      if (json && json.length > 0) {
+         // Process dates for Recharts
+         const processed = json.map((d: any) => ({
+            ...d,
+            region: d.region || d.Region,
+            unemploymentRate: d.unemployment_rate || d['Estimated Unemployment Rate (%)'],
+            labourParticipationRate: d.participation_rate || d['Estimated Labour Participation Rate (%)'],
+            employed: d.employed || d['Estimated Employed'],
+            formattedDate: d.Date
+         }));
+         setMinedData(processed);
+      }
+    } catch (err) {
+      console.log("Backend not active, using sample data.");
+    }
+  };
+  // Load on startup
+  React.useEffect(() => { loadLatestResults(); }, []);
+  const data = useMemo(() => minedData.length > 0 ? minedData : getProcessedData(), [minedData]);
   // ── pipeline ──────────────────────────────────────────────────────────────
   const runPipeline = async () => {
     setIsProcessing(true);
@@ -56,16 +81,34 @@ const App: React.FC = () => {
     setActiveTab('mining');
     setLogs(['[START] Connecting to Unified Engine...', '[PROCESS] API: /api/mine']);
     try {
-      // PERMANENT FIX: If we are on port 5173 (dev), call 5000. 
-      // If we are on port 5000, call the relative path (unified).
-      const apiUrl = window.location.port === '5173' 
-        ? `http://127.0.0.1:5000` 
-        : '';
-      
-      const response = await fetch(`${apiUrl}/api/mine`, {
+      const host = window.location.port === '5173' ? 'http://127.0.0.1:5000' : '';
+      const response = await fetch(`${host}/api/mine`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' }
       });
+      
+      if (!response.ok) throw new Error("Server Error");
+      const steps = [
+        { msg: '[CLEAN] data_loader: Scanning archive folder', delay: 500 },
+        { msg: '[DL] neural_network.py: Training MLP Brain',   delay: 1500 },
+        { msg: '[MINING] clustering.py: Calculating impact zones', delay: 2500 },
+        { msg: '[SUCCESS] Mining Finished. Updating Dashboard...', delay: 4500 },
+      ];
+      steps.forEach(({ msg, delay }, i) => {
+        setTimeout(() => {
+          setLogs(p => [...p, msg]);
+          setCurrentProgress(((i + 1) / steps.length) * 100);
+          if (i === steps.length - 1) {
+            setIsProcessing(false);
+            loadLatestResults(); // <--- REFRESH CHARTS WITH NEW CSV DATA
+          }
+        }, delay);
+      });
+    } catch (err) {
+      setLogs(p => [...p, "!! CONNECTION ERROR: Ensure 'python app.py' is running on Port 5000."]);
+      setIsProcessing(false);
+    }
+  };
 
   // ── derived data ──────────────────────────────────────────────────────────
   // Only show state-level regions (Standard dataset) in the region slicer
